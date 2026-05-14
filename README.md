@@ -27,9 +27,10 @@ lib/
   services/    bangkok_time, occurrence_calculator, scheduler_service,
                local_store (JSON cache), secure_store (token)
   screens/     login, home, reminder form, alarm
-  widgets/     buttons, reminder card, segmented control, datetime picker
+  widgets/     buttons, reminder card, segmented control, date-time picker
   theme/       belfry_theme.dart (design tokens from the prototype)
 assets/icon/   app-icon sources (.svg) — regenerate with flutter_launcher_icons
+assets/sounds/ alarm melodies (alternates by even / odd day)
 ```
 
 The gateway is the source of truth: it stores the reminder *anchor* and the
@@ -53,11 +54,17 @@ Point the app at a gateway with `--dart-define`:
 flutter run -d macos --dart-define=BELFRY_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
+## Keyboard shortcuts
+
+- `n` — new reminder (on the home screen)
+- `Esc` — close the reminder form
+
 ## Status
 
 - Flutter client complete: auth, reminder CRUD, recurrence, lead-time +
-  exact-time scheduling via `flutter_local_notifications`, the ringing screen,
-  offline JSON cache, retry affordance.
+  exact-time scheduling via `flutter_local_notifications`, the ringing alarm
+  screen (looping melody via `audioplayers`), offline JSON cache, and a retry
+  affordance.
 - Tests: `occurrence_calculator_test.dart` (recurrence math) and
   `belfry_api_test.dart` (wire mapping, login access gate, pagination).
 - Pending native work: the Android Kotlin full-screen `AlarmActivity` with
