@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'controller/belfry_controller.dart';
 import 'services/bangkok_time.dart';
+import 'services/foreground_service.dart';
 import 'services/scheduler_service.dart';
 
 Future<void> main() async {
@@ -13,6 +14,11 @@ Future<void> main() async {
 
   // Wire up local notifications + the exact-time alarm channel.
   await SchedulerService.instance.init();
+
+  // Promote the process to foreground-service priority on Android so the
+  // alarm receiver has CPU budget to post notifications when reminders fire.
+  // No-op on macOS. See BelfryService.kt for the why.
+  await BelfryWatcherService.start();
 
   final controller = BelfryController();
   controller.attachScheduler();

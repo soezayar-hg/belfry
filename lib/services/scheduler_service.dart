@@ -1,4 +1,5 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/lead_time.dart';
 import '../models/reminder.dart';
@@ -34,6 +35,11 @@ class SchedulerService {
   static const String _alarmPayloadPrefix = 'alarm:';
   static const String _leadChannelId = 'belfry_leadtime';
   static const String _alarmChannelId = 'belfry_alarm';
+  String? _pendingAlarmReminderId;
+  bool? _lastDarwinPermissionGranted;
+
+  String? get pendingAlarmReminderId => _pendingAlarmReminderId;
+  bool? get lastDarwinPermissionGranted => _lastDarwinPermissionGranted;
 
   // ── Setup ───────────────────────────────────────────────────────────
 
@@ -58,6 +64,8 @@ class SchedulerService {
     );
 
     await _configureAndroid();
+    await _configureDarwin();
+    await _loadLaunchDetails();
     _ready = true;
   }
 
@@ -68,8 +76,20 @@ class SchedulerService {
         >();
     if (android == null) return;
 
-    await android.requestNotificationsPermission();
-    await android.requestExactAlarmsPermission();
+    final notificationsGranted = await android.requestNotificationsPermission();
+    final exactAlarmsGranted = await android.requestExactAlarmsPermission();
+    final fullScreenGranted = await android.requestFullScreenIntentPermission();
+    final notificationsEnabled = await android.areNotificationsEnabled();
+    final canScheduleExact = await android.canScheduleExactNotifications();
+
+    debugPrint(
+      'Belfry Android notification setup: '
+      'requestNotificationsPermission=$notificationsGranted, '
+      'requestExactAlarmsPermission=$exactAlarmsGranted, '
+      'requestFullScreenIntentPermission=$fullScreenGranted, '
+      'areNotificationsEnabled=$notificationsEnabled, '
+      'canScheduleExactNotifications=$canScheduleExact',
+    );
 
     await android.createNotificationChannel(
       const AndroidNotificationChannel(
@@ -90,11 +110,46 @@ class SchedulerService {
     );
   }
 
-  void _handleResponse(NotificationResponse response) {
-    final payload = response.payload;
-    if (payload != null && payload.startsWith(_alarmPayloadPrefix)) {
-      onAlarm?.call(payload.substring(_alarmPayloadPrefix.length));
+  Future<bool?> _configureDarwin() async {
+    final macos = _plugin
+        .resolvePlatformSpecificImplementation<
+          MacOSFlutterLocalNotificationsPlugin
+        >();
+    if (macos == null) {
+      return null;
     }
+
+    final granted = await macos.requestPermissions(
+      alert: true,
+      sound: true,
+      badge: false,
+    );
+    _lastDarwinPermissionGranted = granted;
+
+    return granted;
+  }
+
+  Future<void> _loadLaunchDetails() async {
+    final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp != true) {
+      return;
+    }
+
+    _pendingAlarmReminderId = extractAlarmReminderId(
+      launchDetails?.notificationResponse?.payload,
+    );
+  }
+
+  void _handleResponse(NotificationResponse response) {
+    final reminderId = extractAlarmReminderId(response.payload);
+    if (reminderId != null) {
+      _pendingAlarmReminderId = reminderId;
+      onAlarm?.call(reminderId);
+    }
+  }
+
+  void clearPendingAlarmReminderId() {
+    _pendingAlarmReminderId = null;
   }
 
   // ── Scheduling ──────────────────────────────────────────────────────
@@ -143,7 +198,12 @@ class SchedulerService {
       body: reminder.note.isEmpty ? 'Snoozed reminder' : reminder.note,
       scheduledDate: BangkokTime.toBangkok(at),
       notificationDetails: _alarmDetails(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      // alarmClock mode (AlarmManager.setAlarmClock) is the only path that
+      // bypasses Android 14+ cached-process freezing — exactAllowWhileIdle
+      // still leaves our broadcast receiver unreachable when the OS has
+      // frozen us in the background. Permission-wise this is covered by
+      // USE_EXACT_ALARM, which is granted at install for alarm apps.
+      androidScheduleMode: AndroidScheduleMode.alarmClock,
       payload: '$_alarmPayloadPrefix${reminder.id}',
     );
   }
@@ -155,7 +215,10 @@ class SchedulerService {
       body: reminder.note.isEmpty ? 'It\'s time.' : reminder.note,
       scheduledDate: BangkokTime.toBangkok(occurrence),
       notificationDetails: _alarmDetails(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      // See `snooze` for why this uses alarmClock rather than
+      // exactAllowWhileIdle — the latter doesn't survive cached-process
+      // freezing on Android 14+, which silently swallows our receiver.
+      androidScheduleMode: AndroidScheduleMode.alarmClock,
       payload: '$_alarmPayloadPrefix${reminder.id}',
     );
   }
@@ -193,8 +256,7 @@ class SchedulerService {
       android: AndroidNotificationDetails(
         _alarmChannelId,
         'Reminder alarms',
-        channelDescription:
-            'The exact-time alarm that rings until dismissed.',
+        channelDescription: 'The exact-time alarm that rings until dismissed.',
         importance: Importance.max,
         priority: Priority.max,
         category: AndroidNotificationCategory.alarm,
@@ -213,5 +275,15 @@ class SchedulerService {
   /// slot (0 = exact alarm, 1..6 = lead-times, 99 = snooze).
   int _notificationId(String reminderId, int slot) {
     return (reminderId.hashCode & 0x3FFFFF) * 100 + slot;
+  }
+
+  static String? extractAlarmReminderId(String? payload) {
+    if (payload == null || !payload.startsWith(_alarmPayloadPrefix)) {
+      return null;
+    }
+
+    final reminderId = payload.substring(_alarmPayloadPrefix.length);
+
+    return reminderId.isEmpty ? null : reminderId;
   }
 }

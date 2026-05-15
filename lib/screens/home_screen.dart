@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,6 +9,7 @@ import '../controller/belfry_controller.dart';
 import '../models/reminder.dart';
 import '../services/bangkok_time.dart';
 import '../services/occurrence_calculator.dart';
+import '../services/scheduler_service.dart';
 import '../theme/belfry_theme.dart';
 import '../widgets/belfry_button.dart';
 import '../widgets/reminder_card.dart';
@@ -28,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late Timer _clock;
   DateTime _now = DateTime.now().toUtc();
   bool _tipDismissed = false;
+  bool _macNotificationsDismissed = false;
 
   BelfryController get _controller => widget.controller;
 
@@ -170,37 +174,60 @@ class _HomeScreenState extends State<HomeScreen> {
     final rows = _sortedRows();
     final isEmpty = rows.isEmpty;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 96),
-      children: [
-        _header(),
-        const SizedBox(height: 24),
-        const Divider(height: 1, color: BelfryColors.line),
-        const SizedBox(height: 24),
-        if (!_tipDismissed && isEmpty) ...[
-          _tipCard(),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(),
+          const SizedBox(height: 24),
+          const Divider(height: 1, color: BelfryColors.line),
+          const SizedBox(height: 24),
+          if (_showMacNotificationWarning()) ...[
+            _macNotificationWarning(),
+            const SizedBox(height: 18),
+          ],
+          if (!_tipDismissed && isEmpty) ...[
+            _tipCard(),
+            const SizedBox(height: 18),
+          ],
+          _addRow(rows.length),
+          const SizedBox(height: 16),
+          Expanded(
+            child: _listPane(rows, isEmpty),
+          ),
           const SizedBox(height: 18),
+          Text(
+            'All times shown in Asia/Bangkok (UTC+7).',
+            textAlign: TextAlign.center,
+            style: BelfryText.sans(size: 12, color: BelfryColors.ink3),
+          ),
         ],
-        _addRow(rows.length),
-        const SizedBox(height: 16),
-        if (_controller.isLoading)
-          _loadingState()
-        else if (_controller.loadError != null && isEmpty)
-          _errorState()
-        else if (isEmpty)
-          _emptyState()
-        else
-          ..._reminderList(rows),
-        if (_controller.loadError != null && !isEmpty) ...[
+      ),
+    );
+  }
+
+  Widget _listPane(List<_Row> rows, bool isEmpty) {
+    if (_controller.isLoading) {
+      return _loadingState();
+    }
+
+    if (_controller.loadError != null && isEmpty) {
+      return _errorState();
+    }
+
+    if (isEmpty) {
+      return _emptyState();
+    }
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 20),
+      children: [
+        ..._reminderList(rows),
+        if (_controller.loadError != null) ...[
           const SizedBox(height: 14),
           _inlineSyncError(),
         ],
-        const SizedBox(height: 28),
-        Text(
-          'All times shown in Asia/Bangkok (UTC+7).',
-          textAlign: TextAlign.center,
-          style: BelfryText.sans(size: 12, color: BelfryColors.ink3),
-        ),
       ],
     );
   }
@@ -317,6 +344,58 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  bool _showMacNotificationWarning() {
+    if (kIsWeb || !Platform.isMacOS || _macNotificationsDismissed) {
+      return false;
+    }
+
+    return SchedulerService.instance.lastDarwinPermissionGranted == false;
+  }
+
+  Widget _macNotificationWarning() {
+    return Container(
+      decoration: BoxDecoration(
+        color: BelfryColors.danger.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: BelfryColors.danger.withValues(alpha: 0.22)),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(
+              Icons.warning_amber_rounded,
+              size: 18,
+              color: BelfryColors.danger,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'macOS notifications are disabled for Belfry. Enable them in '
+              'System Settings > Notifications > Belfry, or reminders will '
+              'not fire outside the app.',
+              style: BelfryText.sans(
+                size: 13,
+                color: BelfryColors.ink2,
+                height: 1.45,
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _macNotificationsDismissed = true),
+            child: const Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: Icon(Icons.close, size: 16, color: BelfryColors.ink3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _addRow(int count) {
     return Row(
       children: [
@@ -382,26 +461,29 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _emptyState() {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: BelfryColors.line2, style: BorderStyle.solid),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 52),
-      child: Column(
-        children: [
-          Text(
-            'Nothing to remember — yet.',
-            style: BelfryText.sans(size: 16, color: BelfryColors.ink2),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Add your first reminder and choose how early you want to be '
-            'nudged.',
-            textAlign: TextAlign.center,
-            style: BelfryText.sans(size: 13, color: BelfryColors.ink3),
-          ),
-        ],
+    return Center(
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: BelfryColors.line2, style: BorderStyle.solid),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 52),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Nothing to remember — yet.',
+              style: BelfryText.sans(size: 16, color: BelfryColors.ink2),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Add your first reminder and choose how early you want to be '
+              'nudged.',
+              textAlign: TextAlign.center,
+              style: BelfryText.sans(size: 13, color: BelfryColors.ink3),
+            ),
+          ],
+        ),
       ),
     );
   }

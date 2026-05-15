@@ -4,11 +4,15 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 /// Base URL for the Sozy Gateway. Override at build time with
-/// `--dart-define=BELFRY_API_BASE_URL=https://...`.
-const String apiBaseUrl = String.fromEnvironment(
-  'BELFRY_API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8000/api/v1',
-);
+/// `--dart-define=BELFRY_API_BASE_URL=https://...`. The default targets a
+/// dev gateway on the host machine — on Android the emulator's host is
+/// reachable as 10.0.2.2 (the emulator's own loopback is 127.0.0.1), so the
+/// fallback varies by platform.
+final String apiBaseUrl = const bool.hasEnvironment('BELFRY_API_BASE_URL')
+    ? const String.fromEnvironment('BELFRY_API_BASE_URL')
+    : (Platform.isAndroid
+        ? 'http://10.0.2.2:8000/api/v1'
+        : 'http://127.0.0.1:8000/api/v1');
 
 /// The HTTP client used for every gateway call. Swappable in tests with a
 /// `MockClient`; production code leaves it as the default [http.Client].

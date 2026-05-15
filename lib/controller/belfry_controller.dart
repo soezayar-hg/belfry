@@ -16,6 +16,8 @@ enum SessionStatus { booting, loggedOut, loggedIn }
 /// and the currently-ringing alarm. Mirrors the single `App` component in the
 /// prototype — screens listen to this and call its methods.
 class BelfryController extends ChangeNotifier {
+  static const Duration _foregroundAlarmTolerance = Duration(seconds: 20);
+
   SessionStatus status = SessionStatus.booting;
   Map<String, dynamic>? user;
   List<Reminder> reminders = const [];
@@ -41,6 +43,7 @@ class BelfryController extends ChangeNotifier {
   /// Occurrence keys that have already rung this session — prevents an alarm
   /// re-firing after it is dismissed or snoozed.
   final Set<String> _firedOccurrenceKeys = {};
+  String? _pendingAlarmReminderId;
 
   String get displayName {
     final name = user?['name'];
@@ -53,6 +56,7 @@ class BelfryController extends ChangeNotifier {
   /// Wires the scheduler's foreground-alarm callback into this controller.
   void attachScheduler() {
     SchedulerService.instance.onAlarm = _handleAlarmFired;
+    _pendingAlarmReminderId = SchedulerService.instance.pendingAlarmReminderId;
   }
 
   // ── Session lifecycle ───────────────────────────────────────────────
@@ -72,6 +76,7 @@ class BelfryController extends ChangeNotifier {
     // Show cached reminders instantly, then sync.
     reminders = await LocalStore.readReminders();
     isLoading = reminders.isEmpty;
+    _applyPendingAlarmIfPossible();
     notifyListeners();
     await syncReminders();
   }
@@ -87,6 +92,7 @@ class BelfryController extends ChangeNotifier {
     _startWatcher();
     reminders = await LocalStore.readReminders();
     isLoading = reminders.isEmpty;
+    _applyPendingAlarmIfPossible();
     notifyListeners();
     await syncReminders();
   }
@@ -144,6 +150,7 @@ class BelfryController extends ChangeNotifier {
 
     reminders = fresh;
     isLoading = false;
+    _applyPendingAlarmIfPossible();
     notifyListeners();
 
     // Caching and OS scheduling are best-effort — a failure here (e.g. a
@@ -175,9 +182,7 @@ class BelfryController extends ChangeNotifier {
       reminders = [...reminders, saved];
     } else {
       saved = await BelfryApi.updateReminder(current, id, draft);
-      reminders = [
-        for (final r in reminders) r.id == id ? saved : r,
-      ];
+      reminders = [for (final r in reminders) r.id == id ? saved : r];
     }
     await LocalStore.writeReminders(reminders);
     await SchedulerService.instance.reschedule(reminders);
@@ -202,6 +207,16 @@ class BelfryController extends ChangeNotifier {
   // ── Alarm handling ──────────────────────────────────────────────────
 
   void _handleAlarmFired(String reminderId) {
+    _pendingAlarmReminderId = reminderId;
+    _applyPendingAlarmIfPossible();
+  }
+
+  void _applyPendingAlarmIfPossible() {
+    final reminderId = _pendingAlarmReminderId;
+    if (reminderId == null) {
+      return;
+    }
+
     Reminder? match;
     for (final r in reminders) {
       if (r.id == reminderId) {
@@ -209,7 +224,13 @@ class BelfryController extends ChangeNotifier {
         break;
       }
     }
-    if (match == null) return;
+
+    if (match == null) {
+      return;
+    }
+
+    _pendingAlarmReminderId = null;
+    SchedulerService.instance.clearPendingAlarmReminderId();
     ringingReminder = match;
     notifyListeners();
   }
@@ -249,8 +270,8 @@ class BelfryController extends ChangeNotifier {
   }
 
   /// Rings the first reminder whose exact occurrence has just come due and has
-  /// not yet been acknowledged this session. A five-minute grace window keeps
-  /// long-overdue occurrences from ringing on launch.
+  /// not yet been acknowledged this session. A short tolerance absorbs timer
+  /// drift without letting stale reminders fire minutes late.
   void _checkDueAlarms() {
     if (ringingReminder != null) return;
     final now = DateTime.now().toUtc();
@@ -262,7 +283,7 @@ class BelfryController extends ChangeNotifier {
         now: now,
       );
       final age = now.difference(occurrence);
-      if (age.isNegative || age > const Duration(minutes: 5)) continue;
+      if (age.isNegative || age > _foregroundAlarmTolerance) continue;
 
       final key = '${reminder.id}@${occurrence.millisecondsSinceEpoch}';
       if (_firedOccurrenceKeys.contains(key)) continue;

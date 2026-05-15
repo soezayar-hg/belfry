@@ -558,6 +558,19 @@ class _TimeStepperState extends State<_TimeStepper> {
     setState(() => _editing = true);
   }
 
+  /// Live-commit while the user types so the value follows their input even
+  /// without a Submit/Done affordance (Android's numeric keypad has none) and
+  /// without focus actually leaving the field (tapping a `GestureDetector`
+  /// like the calendar cells doesn't pull focus off a `TextField`). Only
+  /// emits in-range values to avoid weird wraps on partial input like a
+  /// leading "0" for the hour.
+  void _onTextChanged(String raw) {
+    final parsed = int.tryParse(raw.trim());
+    if (parsed != null && parsed >= widget.min && parsed <= widget.max) {
+      widget.onChanged(parsed);
+    }
+  }
+
   void _commitEdit() {
     final parsed = int.tryParse(_text.text.trim());
     if (parsed != null) widget.onChanged(_wrap(parsed));
@@ -646,7 +659,9 @@ class _TimeStepperState extends State<_TimeStepper> {
               ),
             ),
           ),
+          onChanged: _onTextChanged,
           onSubmitted: (_) => _commitEdit(),
+          onTapOutside: (_) => _commitEdit(),
         ),
       );
     }
